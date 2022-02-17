@@ -1,10 +1,11 @@
 package dmm6500
 
 import (
-	"bufio"
+	"errors"
 	"fmt"
 	"log"
 	"net"
+	"time"
 )
 
 type Settings struct {
@@ -58,7 +59,7 @@ func NewReader(
 		// fmt.Sprintf("TRACe:CLEar \"%s\"", buffer),
 		// "*WAI",
 		// Kick off polling loop
-		cmdRead,
+		// cmdRead,
 	}
 
 	for _, cmd := range commands {
@@ -70,18 +71,31 @@ func NewReader(
 		}
 	}
 
-	scanner := bufio.NewScanner(conn)
+	// The DMM does not seem to reset some TCP connection related
+	// buffer when connecting to it.
+	// If we do not wait for the response to a READ? command in the
+	// previous connection but instead disconnect the connection
+	// immediately, then the response will be sent unsolicited
+	// after the subsequent connection is established.
+	if err := flushInput(conn, 100*time.Millisecond); err != nil {
+		conn.Close()
+		return &reader{}, err
+	}
 
 	go func() {
 		counter := 0
-		for scanner.Scan() {
+		cmdBytes := append([]byte(cmdRead), '\n')
+		for {
 			counter++
-			log.Printf("%d %v", counter, scanner.Text())
-			cmdBytes := append([]byte(cmdRead), '\n')
 			if _, err := conn.Write(cmdBytes); err != nil {
 				log.Printf("error while writing %v", err)
-				return
 			}
+			line, err := readResponse(conn)
+			if err != nil {
+				log.Println(err)
+				break
+			}
+			log.Printf("%d %v", counter, line)
 		}
 		log.Println("exiting scanner goroutine")
 	}()
@@ -93,4 +107,59 @@ func NewReader(
 
 func (r *reader) Close() {
 	r.conn.Close()
+}
+
+func readResponse(conn net.Conn) (string, error) {
+
+	// timeout should depend on averager settings
+	if err := conn.SetReadDeadline(time.Now().Add(1 * time.Second)); err != nil {
+		return "", err
+	}
+
+	line := make([]byte, 0, 128)
+
+	for {
+		buffer := make([]byte, 128)
+		n, err := conn.Read(buffer)
+
+		if err != nil {
+			return "", err
+		}
+
+		if n == 0 {
+			return "", errors.New("connection closed")
+		}
+
+		for i := 0; i < n; i++ {
+			if buffer[i] == '\n' {
+				line = append(line, buffer[:i]...)
+				return string(line), nil
+			}
+		}
+
+		line = append(line, buffer...)
+	}
+}
+
+// flushInput reads all data from the connection until
+// there is silence for a while
+func flushInput(conn net.Conn, silence time.Duration) error {
+	discarder := make([]byte, 4096)
+	for {
+		if err := conn.SetReadDeadline(time.Now().Add(silence)); err != nil {
+			return err
+		}
+
+		n, err := conn.Read(discarder)
+
+		if e, ok := err.(net.Error); ok && e.Timeout() {
+			return nil
+		} else if err != nil {
+			return err
+		}
+
+		if n == 0 {
+			return errors.New("connection closed")
+		}
+	}
 }

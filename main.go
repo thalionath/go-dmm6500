@@ -23,7 +23,7 @@ func run() {
 
 	defer reader.Close()
 
-	time.Sleep(1 * time.Second)
+	time.Sleep(2 * time.Second)
 }
 
 func main() {
@@ -32,12 +32,8 @@ func main() {
 	log.Print("Startup")
 
 	for i := 0; i < 4; i++ {
-		// for each run of this program
-		// we see an artefact from each previous run
-		// it seems like that clearing a buffers from remote
-		// behaves differently from clearing at the user interface
 		log.Printf("Run #%v", i)
 		run()
-		time.Sleep(10 * time.Second)
+		time.Sleep(2 * time.Second)
 	}
 }
